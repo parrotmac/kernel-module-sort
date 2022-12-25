@@ -1,20 +1,20 @@
 use anyhow::Result;
+use clap::Parser;
 use glob::glob;
 use object::{File as ObjectFile, Object, ObjectSymbol};
 use std::{collections, fs, path::PathBuf};
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-   #[arg(short, long)]
-   kernel: String,
+    #[arg(short, long)]
+    kernel: String,
 
-   #[arg(short, long)]
-   modules: String,
+    #[arg(short, long)]
+    modules: String,
 
-   #[arg(short, long)]
-   target: String,
+    #[arg(short, long)]
+    target: String,
 }
 
 #[derive(Debug, PartialEq, Clone, Default, Eq, PartialOrd, Ord)]
@@ -134,10 +134,7 @@ fn main() {
 
     print!("Parsing kernel...");
 
-    let kernel_brief = read_to_module(PathBuf::from(
-            args.kernel,
-    ))
-    .unwrap();
+    let kernel_brief = read_to_module(PathBuf::from(args.kernel)).unwrap();
 
     println!("done.");
     print!("Parsing modules...");
@@ -164,8 +161,7 @@ fn main() {
 
     let kernel_plus_all_modules = [&kernel_modules[..], &[kernel_brief]].concat();
 
-    let wireguard_module_tree =
-        resolve_dependency_tree(kernel_plus_all_modules, args.target);
+    let wireguard_module_tree = resolve_dependency_tree(kernel_plus_all_modules, args.target);
 
     println!("done.");
 
