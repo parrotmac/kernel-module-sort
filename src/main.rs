@@ -2,6 +2,20 @@ use anyhow::Result;
 use glob::glob;
 use object::{File as ObjectFile, Object, ObjectSymbol};
 use std::{collections, fs, path::PathBuf};
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+   #[arg(short, long)]
+   kernel: String,
+
+   #[arg(short, long)]
+   modules: String,
+
+   #[arg(short, long)]
+   target: String,
+}
 
 #[derive(Debug, PartialEq, Clone, Default, Eq, PartialOrd, Ord)]
 struct ModuleBrief {
@@ -116,17 +130,19 @@ fn read_to_module(path: PathBuf) -> Result<ModuleBrief> {
 }
 
 fn main() {
+    let args = Args::parse();
+
     print!("Parsing kernel...");
 
     let kernel_brief = read_to_module(PathBuf::from(
-        "/home/isaac/Dev/mini-linux/linux-build/vmlinux",
+            args.kernel,
     ))
     .unwrap();
 
     println!("done.");
     print!("Parsing modules...");
 
-    let kernel_modules: Vec<ModuleBrief> = glob("/home/isaac/Dev/mini-linux/linux-build/**/*.ko")
+    let kernel_modules: Vec<ModuleBrief> = glob(format!("{}/**/*.ko", args.modules).as_str())
         .expect("Failed to read glob pattern")
         .filter_map(|entry| match entry {
             Ok(path) => match read_to_module(path) {
@@ -149,13 +165,13 @@ fn main() {
     let kernel_plus_all_modules = [&kernel_modules[..], &[kernel_brief]].concat();
 
     let wireguard_module_tree =
-        resolve_dependency_tree(kernel_plus_all_modules, "wireguard.ko".to_string());
+        resolve_dependency_tree(kernel_plus_all_modules, args.target);
 
     println!("done.");
 
     for module in wireguard_module_tree {
         if module.name != "vmlinux" {
-            println!("insmod {}", module.path);
+            println!("{}", module.path);
         }
     }
 }
