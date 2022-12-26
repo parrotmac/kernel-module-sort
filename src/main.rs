@@ -1,21 +1,17 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Arg, Command};
 use glob::glob;
 use object::{File as ObjectFile, Object, ObjectSymbol};
-use std::{collections, fs, path::PathBuf};
+use std::{
+    collections,
+    fs::{self, File},
+    io::Read,
+    path::PathBuf,
+};
+use xz::read::XzDecoder;
+use zstd::decode_all;
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(short, long)]
-    kernel: String,
-
-    #[arg(short, long)]
-    modules: String,
-
-    #[arg(short, long)]
-    target: String,
-}
+mod live;
 
 #[derive(Debug, PartialEq, Clone, Default, Eq, PartialOrd, Ord)]
 struct ModuleBrief {
@@ -90,7 +86,21 @@ fn resolve_dependency_tree(
 }
 
 fn read_to_module(path: PathBuf) -> Result<ModuleBrief> {
-    let binary_data = fs::read(&path)?;
+    // println!("[Debug] filetype for {}: {}", &path.to_str().unwrap(), infer::get_from_path(&path).unwrap().unwrap().mime_type());
+
+    let binary_data: Vec<u8> = match infer::get_from_path(&path).unwrap().unwrap().mime_type() {
+        "application/x-executable" | "application/vnd.microsoft.portable-executable" => {
+            fs::read(&path)?
+        }
+        "application/zstd" => decode_all(File::open(&path)?)?,
+        "application/x-xz" => {
+            let decoder = XzDecoder::new(File::open(&path)?);
+            decoder.bytes().collect::<Result<Vec<u8>, _>>()?
+        }
+        _ => {
+            panic!("Unknown file type for {}", path.to_str().unwrap());
+        }
+    };
 
     let obj_file = ObjectFile::parse(&*binary_data)?;
 
@@ -129,17 +139,10 @@ fn read_to_module(path: PathBuf) -> Result<ModuleBrief> {
     })
 }
 
-fn main() {
-    let args = Args::parse();
-
-    print!("Parsing kernel...");
-
-    let kernel_brief = read_to_module(PathBuf::from(args.kernel)).unwrap();
-
-    println!("done.");
-    print!("Parsing modules...");
-
-    let kernel_modules: Vec<ModuleBrief> = glob(format!("{}/**/*.ko", args.modules).as_str())
+fn print_module_dependency_tree(kernel_path: &str, modules_pattern: &str, module_name: &str) {
+    let kernel_brief = read_to_module(PathBuf::from(kernel_path)).unwrap();
+    let modules_glob_pattern = modules_pattern.to_string();
+    let kernel_modules: Vec<ModuleBrief> = glob(modules_glob_pattern.as_str())
         .expect("Failed to read glob pattern")
         .filter_map(|entry| match entry {
             Ok(path) => match read_to_module(path) {
@@ -156,18 +159,65 @@ fn main() {
         })
         .collect();
 
-    println!("done.");
-    print!("Resolving dependency tree...");
-
     let kernel_plus_all_modules = [&kernel_modules[..], &[kernel_brief]].concat();
 
-    let wireguard_module_tree = resolve_dependency_tree(kernel_plus_all_modules, args.target);
-
-    println!("done.");
+    let wireguard_module_tree =
+        resolve_dependency_tree(kernel_plus_all_modules, module_name.to_string());
 
     for module in wireguard_module_tree {
         if module.name != "vmlinux" {
             println!("{}", module.path);
+        }
+    }
+}
+
+fn main() {
+    let m = Command::new("ModuleRS")
+        .author("Isaac Parker, isaac@linux.com")
+        .version("0.1.0")
+        .about("Linux kernel module utility")
+        .subcommand(Command::new("modprobe").about("Load a module"))
+        .subcommand(Command::new("lsmod").about("List loaded modules"))
+        .subcommand(Command::new("modinspect").args(vec![
+                Arg::new("kernel")
+                    .short('k')
+                    .long("kernel")
+                    .default_value("/boot/vmlinuz"),
+                Arg::new("modules")
+                    .short('m')
+                    .long("modules")
+                    .default_value("/lib/modules/*/kernel/**/*.ko"),
+                Arg::new("target")
+                    .short('t')
+                    .long("target")
+                    .default_value(""),
+                ]))
+        .get_matches();
+
+    match m.subcommand() {
+        Some(("lsmod", _)) => {
+            live::parse_module_listing(fs::read_to_string("/proc/modules").unwrap().as_str());
+        }
+        Some(("modprobe", _)) => {
+            panic!("Not yet implemented");
+        }
+        Some(("modinspect", args)) => {
+            let kernel = args
+                .get_one::<String>("kernel")
+                .ok_or("No kernel path provided")
+                .unwrap();
+            let modules = args
+                .get_one::<String>("modules")
+                .ok_or("No modules path provided")
+                .unwrap();
+            let target = args
+                .get_one::<String>("target")
+                .ok_or("No target module provided")
+                .unwrap();
+            print_module_dependency_tree(kernel.as_str(), modules.as_str(), target.as_str());
+        }
+        _ => {
+            println!("No subcommand");
         }
     }
 }
